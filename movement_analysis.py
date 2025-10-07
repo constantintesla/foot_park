@@ -113,31 +113,52 @@ class ClinicalMovementAnalyzer:
         if not metrics or not segments:
             return 0, {}
             
-        # Базовые метрики
-        amplitude_score = min(4, int(metrics['amplitude'] / 20))  # 0-4 (20px = 1 балл)
-        frequency_score = min(4, int(metrics['frequency'] * 2))   # 0-4 (0.5Hz = 1 балл)
+        # Базовые метрики (4=худший результат, 0=лучший)
+        # Амплитуда: чем меньше амплитуда, тем хуже результат
+        if metrics['amplitude'] < 10:
+            amplitude_score = 4  # Очень плохая амплитуда
+        elif metrics['amplitude'] < 20:
+            amplitude_score = 3  # Плохая амплитуда
+        elif metrics['amplitude'] < 40:
+            amplitude_score = 2  # Умеренная амплитуда
+        elif metrics['amplitude'] < 60:
+            amplitude_score = 1  # Хорошая амплитуда
+        else:
+            amplitude_score = 0  # Отличная амплитуда
+            
+        # Частота: чем меньше частота, тем хуже результат
+        if metrics['frequency'] < 0.5:
+            frequency_score = 4  # Очень плохая частота
+        elif metrics['frequency'] < 1.0:
+            frequency_score = 3  # Плохая частота
+        elif metrics['frequency'] < 2.0:
+            frequency_score = 2  # Умеренная частота
+        elif metrics['frequency'] < 3.0:
+            frequency_score = 1  # Хорошая частота
+        else:
+            frequency_score = 0  # Отличная частота
         
-        # Оценка ухудшения к концу теста
+        # Оценка ухудшения к концу теста (4=сильное ухудшение, 0=без ухудшения)
         decline_score = 0
-        if segments['end_amplitude'] > 0.7 * segments['start_amplitude']:
-            decline_score = 4
-        elif segments['end_amplitude'] > 0.5 * segments['start_amplitude']:
-            decline_score = 3
-        elif segments['end_amplitude'] > 0.3 * segments['start_amplitude']:
-            decline_score = 2
-        elif segments['end_amplitude'] > 0.1 * segments['start_amplitude']:
-            decline_score = 1
+        if segments['end_amplitude'] < 0.1 * segments['start_amplitude']:
+            decline_score = 4  # Сильное ухудшение
+        elif segments['end_amplitude'] < 0.3 * segments['start_amplitude']:
+            decline_score = 3  # Значительное ухудшение
+        elif segments['end_amplitude'] < 0.5 * segments['start_amplitude']:
+            decline_score = 2  # Умеренное ухудшение
+        elif segments['end_amplitude'] < 0.7 * segments['start_amplitude']:
+            decline_score = 1  # Легкое ухудшение
         
         # Общая оценка (среднее с округлением)
         total_score = round((amplitude_score + frequency_score + decline_score) / 3)
         
-        # Интерпретация
+        # Интерпретация (по требованиям: 4=наибольший уровень декомпенсации, 0=минимальный)
         score_description = {
-            4: "Норма: сохраненная амплитуда и ритм на всем протяжении теста",
-            3: "Легкие нарушения: незначительное снижение амплитуды/ритма",
+            4: "Наибольший уровень неврологической декомпенсации: грубые нарушения движения",
+            3: "Выраженные нарушения: значительное ухудшение к концу теста",
             2: "Умеренные нарушения: заметное снижение параметров",
-            1: "Выраженные нарушения: значительное ухудшение к концу теста",
-            0: "Грубые нарушения: движение практически невозможно"
+            1: "Легкие нарушения: незначительное снижение амплитуды/ритма",
+            0: "Минимальный уровень: сохраненная амплитуда и ритм на всем протяжении теста"
         }
         
         details = {
@@ -247,9 +268,31 @@ class ClinicalMovementAnalyzer:
             'test_duration': len(self.df) / self.fps if self.df is not None else 0
         }
     
+    def get_segment_analysis(self) -> Dict:
+        """Получить детальный анализ сегментов"""
+        analysis = {}
+        
+        for foot_name, segments in [('left_foot', self.left_segments), ('right_foot', self.right_segments)]:
+            if segments:
+                analysis[foot_name] = {
+                    'start_amplitude': segments.get('start_amplitude', 0),
+                    'middle_amplitude': segments.get('middle_amplitude', 0),
+                    'end_amplitude': segments.get('end_amplitude', 0),
+                    'start_frequency': segments.get('start_frequency', 0),
+                    'middle_frequency': segments.get('middle_frequency', 0),
+                    'end_frequency': segments.get('end_frequency', 0),
+                    'amplitude_decline': (segments.get('start_amplitude', 0) - segments.get('end_amplitude', 0)) / max(segments.get('start_amplitude', 1), 1),
+                    'frequency_decline': (segments.get('start_frequency', 0) - segments.get('end_frequency', 0)) / max(segments.get('start_frequency', 1), 1)
+                }
+            else:
+                analysis[foot_name] = None
+                
+        return analysis
+
     def generate_report(self, output_path: str = None) -> str:
         """Генерация клинического отчета"""
         assessment = self.get_clinical_assessment()
+        segment_analysis = self.get_segment_analysis()
         report = []
         
         report.append("КЛИНИЧЕСКИЙ ОТЧЕТ О ВЫПОЛНЕНИИ ФУНКЦИОНАЛЬНОЙ ПРОБЫ")
@@ -277,6 +320,19 @@ class ClinicalMovementAnalyzer:
                     report.append(f"  - Средняя амплитуда: {metrics['amplitude']:.1f} px")
                     report.append(f"  - Частота движений: {metrics['frequency']:.2f} Гц")
                     report.append(f"  - Количество ударов: {metrics['peaks_count']}")
+                    
+                    # Анализ сегментов
+                    if segment_analysis[foot]:
+                        seg = segment_analysis[foot]
+                        report.append("\nАнализ сегментов:")
+                        report.append(f"  - Амплитуда (начало): {seg['start_amplitude']:.1f} px")
+                        report.append(f"  - Амплитуда (середина): {seg['middle_amplitude']:.1f} px")
+                        report.append(f"  - Амплитуда (конец): {seg['end_amplitude']:.1f} px")
+                        report.append(f"  - Снижение амплитуды: {seg['amplitude_decline']*100:.1f}%")
+                        report.append(f"  - Частота (начало): {seg['start_frequency']:.2f} Гц")
+                        report.append(f"  - Частота (середина): {seg['middle_frequency']:.2f} Гц")
+                        report.append(f"  - Частота (конец): {seg['end_frequency']:.2f} Гц")
+                        report.append(f"  - Снижение частоты: {seg['frequency_decline']*100:.1f}%")
             else:
                 report.append("Данные отсутствуют или недостаточны для анализа")
             
